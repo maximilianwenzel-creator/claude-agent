@@ -28,6 +28,9 @@ PAL = {
     "ribbon": [89, 125, 161, 197, 204, 211],
     "heart":  [52, 88, 124, 160, 196, 203],
     "core":   [94, 130, 136, 172, 178, 220],
+    "throat": [64, 106, 149, 186, 192, 230],
+    "spot":   [52, 88, 89, 125, 126, 161],
+    "anther": [52, 94, 130, 166, 172, 208],
 }
 
 LIGHT = (0.35, 0.65, -0.68)
@@ -68,7 +71,9 @@ def build_bouquet(rng):
     """Liefert Punkte (x, y, z, nx, ny, nz, palette, beidseitig, wachstum)."""
     pts = []
     tie = (0.0, -0.55, 0.0)
-    colors = ["red", "pink", "purple", "yellow", "orange", "white", "red", "pink", "yellow", "purple", "orange", "white"]
+    # Lilien (lily_*) und Zierblueten gemischt; Lilien an markanten Plaetzen
+    colors = ["lily_white", "pink", "lily_pink", "yellow", "purple", "lily_white", "red",
+              "lily_orange", "white", "lily_pink", "orange", "purple"]
     heads = []
     # Blueten auf einer Kuppel verteilen
     n = len(colors)
@@ -88,7 +93,11 @@ def build_bouquet(rng):
         up = (0, 1, 0) if abs(nrm[1]) < 0.95 else (1, 0, 0)
         u = norm(cross(nrm, up))
         v = cross(nrm, u)
-        steps = 70
+        if col.startswith("lily"):
+            pts.extend(build_lily(c, nrm, u, v, col, rng))
+            steps = 0
+        else:
+            steps = 70
         for a in range(steps):
             th = 2 * math.pi * a / steps
             rmax = R * (0.45 + 0.55 * abs(math.cos(petals * th / 2)))
@@ -171,6 +180,54 @@ def heart_xy(t):
     x = 16 * math.sin(t) ** 3
     y = 13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)
     return x / 17.0, y / 17.0
+
+
+def build_lily(c, nrm, u, v, col, rng):
+    """Lilie: sechs spitze Bluetenblaetter als Trichter mit zurueckgebogenen Spitzen, dazu Staubgefaesse."""
+    pts = []
+    Lp = 0.46  # Laenge eines Bluetenblatts
+    W = 0.12  # maximale halbe Breite
+    base_pal = {"lily_white": "white", "lily_pink": "pink", "lily_orange": "orange"}[col]
+    for i in range(6):
+        a = i * math.pi / 3 + (0.5 if i % 2 else 0.0) * 0.15  # innere und aeussere Blattreihe leicht versetzt
+        rd = tuple(u[k] * math.cos(a) + v[k] * math.sin(a) for k in range(3))   # radial
+        sd = tuple(-u[k] * math.sin(a) + v[k] * math.cos(a) for k in range(3))  # seitlich
+        s = 0.0
+        while s <= 1.0:
+            rho = Lp * (0.15 * s + 0.85 * s * s)          # nach aussen
+            h = Lp * (0.95 * s - 0.85 * s * s)            # erst hoch, dann zurueckgebogen
+            drho = Lp * (0.15 + 1.7 * s)
+            dh = Lp * (0.95 - 1.7 * s)
+            tang = tuple(drho * rd[k] + dh * nrm[k] for k in range(3))
+            nn = norm(cross(tang, sd))
+            w = W * math.sin(math.pi * min(1.0, s ** 0.6)) * (1 - 0.35 * s) + 0.01
+            q = -w
+            while q <= w:
+                fold = -abs(q) * 0.35                     # Mittelrippe
+                p = tuple(c[k] + rho * rd[k] + (h + fold) * nrm[k] + q * sd[k] for k in range(3))
+                if s < 0.18:
+                    pal = "throat"
+                elif col == "lily_pink" and abs(q) > 0.7 * w:
+                    pal = "white"                         # Stargazer: helle Raender
+                elif col != "lily_white" and 0.25 < s < 0.6 and rng.random() < 0.07:
+                    pal = "spot"                          # Sprenkel
+                else:
+                    pal = base_pal
+                pts.append((p[0], p[1], p[2], nn[0], nn[1], nn[2], pal, True, 0.55 + 0.45 * s))
+                q += 0.016
+            s += 0.03
+    # Staubgefaesse: duenne Faeden mit Staubbeuteln
+    for i in range(6):
+        a = i * math.pi / 3 + math.pi / 6
+        rd = tuple(u[k] * math.cos(a) + v[k] * math.sin(a) for k in range(3))
+        for j in range(22):
+            t = j / 21
+            p = tuple(c[k] + rd[k] * 0.13 * t * t + nrm[k] * 0.36 * t for k in range(3))
+            pts.append((p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], "stem" if t < 0.9 else "anther", True, 0.6 + 0.4 * t))
+        for dx in (-0.012, 0.0, 0.012):
+            p = tuple(c[k] + rd[k] * (0.13 + dx) + nrm[k] * 0.37 for k in range(3))
+            pts.append((p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], "anther", True, 1.0))
+    return pts
 
 
 def build_heart():
