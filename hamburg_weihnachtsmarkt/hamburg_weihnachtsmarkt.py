@@ -20,11 +20,14 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H, FPS = 720, 1280, 30
-DUR = 15.0
-INTRO = 3.0                      # Sekunden Code Intro
+DUR = 12.0
+INTRO = 0.0                      # Code Intro (3.0 = an, 0 = aus)
+SQ = 0.85                        # Szene stauchen: Platz fuer Schrift
+GREETING = ("Merry Christmas", "Schnucki")
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 FONT = "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf"
+SCRIPT = os.path.join(HERE, "fonts", "GreatVibes-Regular.ttf")
 FONT_B = "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Bold.ttf"
 
 # Label IDs der Szenenmaske
@@ -289,18 +292,18 @@ SLEIGH_T0, SLEIGH_T1 = 5.0, 10.2      # Szenenzeit
 def sleigh_pos(ts):
     u = (ts - SLEIGH_T0) / (SLEIGH_T1 - SLEIGH_T0)
     x = -340 + (W + 380) * u
-    y = 300 + 40 * math.sin(u * math.pi * 1.5) - 30 * u
+    y = 430 + 40 * math.sin(u * math.pi * 1.5) - 30 * u
     return x, y
 
 
 # Feuerwerk: (Explosionszeit Szene, x, y, Farbe, Partikel)
 FIREWORKS = [
-    (2.5, 140, 330, (255, 70, 70), 300),
-    (4.0, 590, 250, (255, 205, 90), 320),
-    (5.5, 120, 210, (90, 150, 255), 300),
-    (7.0, 600, 400, (110, 255, 150), 300),
-    (9.6, 150, 420, (255, 110, 200), 340),
-    (9.9, 590, 210, (255, 215, 120), 420),
+    (2.5, 130, 480, (255, 70, 70), 300),
+    (4.0, 600, 430, (255, 205, 90), 320),
+    (5.5, 110, 400, (90, 150, 255), 300),
+    (7.0, 610, 530, (110, 255, 150), 300),
+    (9.6, 140, 530, (255, 110, 200), 340),
+    (9.9, 590, 410, (255, 215, 120), 420),
 ]
 
 
@@ -409,7 +412,7 @@ def scene_targets(ts):
     on = 0.45 + 0.55 * ((np.arange(BU_X.size) + int(ts * 6)) % 3 == 0)
     bc = BULB_COLS[phase % len(BULB_COLS)] * on[:, None]
     x = np.concatenate([ST_X, tx, kx, BU_X])
-    y = np.concatenate([ST_Y, ty, ky, BU_Y])
+    y = H - (H - np.concatenate([ST_Y, ty, ky, BU_Y])) * SQ
     c = np.concatenate([sc, tc, kc, bc])
     return x, y, c
 
@@ -422,6 +425,59 @@ B_SY = H + _r.uniform(30, 500, N_SCENE)
 B_DELAY = 0.05 + 1.0 * np.clip((H - _ty0) / H, 0, 1) + \
     _r.uniform(0, 0.25, N_SCENE)
 B_FLY = 0.8
+
+
+def greeting_particles():
+    """Schnoerkelschrift als Maske, gerastert zu feinen Goldpunkten."""
+    im = Image.new("L", (W, 330), 0)
+    d = ImageDraw.Draw(im)
+    lines = ((GREETING[0], 104, 42), (GREETING[1], 132, 148))
+    for txt, size, y in lines:
+        f = ImageFont.truetype(SCRIPT, size)
+        w = f.getlength(txt)
+        d.text(((W - w) / 2, y), txt, font=f, fill=255)
+    a = np.asarray(im)
+    r = np.random.default_rng(33)
+    ys, xs = np.mgrid[0:a.shape[0]:2, 0:W:2]
+    m = a[ys, xs] > 90
+    x = xs[m] + r.uniform(-0.4, 0.4, m.sum())
+    y = ys[m] + r.uniform(-0.4, 0.4, m.sum())
+    line2 = y > 175
+    # Schreibreihenfolge: erst Zeile 1, dann Zeile 2, je links nach rechts
+    order = np.where(line2, 1.0 + x / W, x / W)
+    return x, y, order, r.uniform(0, 6.3, x.size)
+
+
+GR_X, GR_Y, GR_ORD, GR_PH = greeting_particles()
+GR_T0, GR_SPEED = 2.1, 1.35          # Start (Szenenzeit), Sek. pro Zeile
+
+
+def draw_greeting(canvas, ts):
+    reveal = (ts - GR_T0) / GR_SPEED
+    if reveal <= 0:
+        return
+    age = reveal - GR_ORD
+    m = age > 0
+    if not m.any():
+        return
+    a = age[m]
+    gold = np.array([255, 212, 130], float)
+    tw = 0.82 + 0.18 * np.sin(3.0 * ts + GR_PH[m])
+    flash = 1 + 2.5 * np.exp(-a * 9)
+    c = gold[None] * (tw * flash)[:, None] * 0.75
+    c += np.array([255, 255, 255]) * (np.exp(-a * 9) * 0.6)[:, None]
+    splat(canvas, GR_X[m], GR_Y[m], c, SMALL)
+    # Funkelnde Schreibspitze
+    if reveal < 2.0:
+        front = (np.abs(GR_ORD - reveal) < 0.012)
+        if front.any():
+            fx, fy = GR_X[front].mean(), GR_Y[front].mean()
+            rr = np.random.default_rng(int(ts * 1000))
+            sx = fx + rr.normal(0, 9, 40)
+            sy = fy + rr.normal(0, 9, 40)
+            sc = np.repeat(np.array([[255, 240, 200]]), 40, 0) * \
+                rr.uniform(0.4, 1.6, (40, 1))
+            splat(canvas, sx, sy, sc, SMALL)
 
 
 def render_scene(ts):
@@ -476,6 +532,8 @@ def render_scene(ts):
         if res is not None:
             splat(canvas, *res)
 
+    draw_greeting(canvas, ts)
+
     # Schnee
     sx = SNOW_X0 + 12 * np.sin(0.9 * ts + SNOW_PH)
     sy = (SNOW_Y0 + SNOW_V * ts) % H
@@ -522,7 +580,8 @@ def frame_scene(ts, t_abs):
         out += (0.12 - ts) / 0.12 * 120
     fade = np.clip((DUR - t_abs) / 0.35, 0, 1)
     out = np.clip(out * fade, 0, 255).astype(np.uint8)
-    return title_bar(Image.fromarray(out))
+    img = Image.fromarray(out)
+    return title_bar(img) if INTRO > 0 else img
 
 
 # ------------------------------------------------------------ Code Intro
@@ -718,20 +777,22 @@ def build_audio():
     wet = np.zeros((n, 2))
     r = np.random.default_rng(9)
 
+    M = INTRO - 3.0                     # Musik relativ zum Szenenstart
     # Tastaturklicks waehrend des Tippens
     t = 0.05
-    while t < TYPE_END:
+    while t < TYPE_END and INTRO > 0:
         c = r.normal(0, 1, 500) * np.exp(-np.arange(500) / 60)
         c = c - lowpass(c, 6)
         add(dry, t, c, r.uniform(0.35, 0.65), 0.10)
         t += r.uniform(0.035, 0.075)
     t = CMD_T0
-    while t < CMD_T1:
+    while t < CMD_T1 and INTRO > 0:
         c = r.normal(0, 1, 500) * np.exp(-np.arange(500) / 60)
         add(dry, t, c - lowpass(c, 6), 0.5, 0.10)
         t += r.uniform(0.03, 0.05)
     c = r.normal(0, 1, 900) * np.exp(-np.arange(900) / 120)
-    add(dry, ENTER_T, lowpass(c, 3), 0.5, 0.28)
+    if INTRO > 0:
+        add(dry, ENTER_T, lowpass(c, 3), 0.5, 0.28)
 
     # Rauschen beim Partikelaufbau
     wl = int(1.9 * SR)
@@ -753,7 +814,7 @@ def build_audio():
     mel = [(62, 1), (67, .75), (67, .25), (67, 1.5), (69, .5),
            (71, .75), (71, .25), (71, 1.5), (71, .5),
            (69, .5), (71, .5), (72, 1), (66, 1), (69, 1), (67, 2)]
-    beat, t = 0.5, 5.0
+    beat, t = 0.5, 5.0 + M
     for m, b in mel:
         add(wet, t, glock(midi(m + 12), 2.5), 0.5, 0.42)
         t += b * beat
@@ -761,18 +822,19 @@ def build_audio():
               (8.5, (48, 52, 55)), (9.5, (50, 54, 57)),
               (10.5, (43, 55, 59, 62))]
     for tc, notes in chords:
+        tc += M
         for j, m in enumerate(notes):
             add(wet, tc + j * 0.012, celesta(midi(m + 12), 2.2),
                 0.35 + 0.3 * j / max(1, len(notes) - 1), 0.12)
         add(wet, tc, celesta(midi(notes[0]), 1.8), 0.5, 0.18)
     # Schlussarpeggio und Akkord
     for i, m in enumerate([67, 71, 74, 79, 83, 86]):
-        add(wet, 11.6 + i * 0.16, glock(midi(m + 12), 2.4),
+        add(wet, 11.6 + M + i * 0.16, glock(midi(m + 12), 2.4),
             0.3 + 0.08 * i, 0.32)
     for j, m in enumerate([55, 59, 62, 67, 71, 74]):
-        add(wet, 12.6 + j * 0.02, celesta(midi(m + 12), 2.6),
+        add(wet, 12.6 + M + j * 0.02, celesta(midi(m + 12), 2.6),
             0.3 + 0.08 * j, 0.14)
-    add(wet, 12.6, glock(midi(91), 2.4), 0.5, 0.3)
+    add(wet, 12.6 + M, glock(midi(91), 2.4), 0.5, 0.3)
 
     # Schlittenglocken, Panorama folgt dem Schlitten
     t = INTRO + SLEIGH_T0
